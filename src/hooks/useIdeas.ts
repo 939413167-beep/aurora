@@ -1,4 +1,5 @@
 // 灵感管理 Hook - 本地缓存 + GitHub 云同步
+// 修复：使用函数式状态更新避免 stale closure
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Idea } from '@/types/idea'
@@ -35,6 +36,7 @@ export function useIdeas() {
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const initDone = useRef(false)
+  const needsSync = useRef(false)
 
   // 首次加载：从 GitHub 拉取数据（如果已配置）
   useEffect(() => {
@@ -46,14 +48,12 @@ export function useIdeas() {
       loadIdeasFromGitHub()
         .then((remoteIdeas) => {
           if (remoteIdeas.length > 0) {
-            // 合并策略：以远程数据为主，本地新增的也保留
             const localIdeas = loadFromLocal()
             const remoteIds = new Set(remoteIdeas.map(i => i.id))
             const merged = [
               ...remoteIdeas,
               ...localIdeas.filter(i => !remoteIds.has(i.id)),
             ]
-            // 按时间排序（最新的在前）
             merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
             setIdeas(merged)
             saveToLocal(merged)
@@ -69,24 +69,21 @@ export function useIdeas() {
     }
   }, [])
 
-  // 每次本地变更后同步到 GitHub
-  const syncToGitHub = useCallback(async (updatedIdeas: Idea[]) => {
-    if (!isGitHubConfigured()) return
+  // 自动同步到 GitHub（仅在用户操作触发时）
+  useEffect(() => {
+    if (!needsSync.current || !isGitHubConfigured()) return
+    needsSync.current = false
     setSyncing(true)
-    try {
-      await saveIdeasToGitHub(updatedIdeas)
-      setSyncError(null)
-    } catch (err: any) {
-      setSyncError(err.message)
-    } finally {
-      setSyncing(false)
-    }
-  }, [])
+    const currentIdeas = loadFromLocal()
+    saveIdeasToGitHub(currentIdeas)
+      .then(() => setSyncError(null))
+      .catch((err: any) => setSyncError(err.message))
+      .finally(() => setSyncing(false))
+  }, [ideas])
 
-  // 添加灵感
+  // 添加灵感（函数式更新，无 stale closure）
   const addIdea = useCallback((content: string, tags: string[] = []) => {
     const now = new Date().toISOString()
-    // 标题：取第一行或前 50 字符
     const lines = content.trim().split('\n')
     const title = lines[0].length > 50
       ? lines[0].substring(0, 50) + '...'
@@ -102,42 +99,50 @@ export function useIdeas() {
       isFavorite: false,
     }
 
-    const updated = [newIdea, ...ideas]
-    setIdeas(updated)
-    saveToLocal(updated)
-    syncToGitHub(updated)
+    setIdeas(prev => {
+      const updated = [newIdea, ...prev]
+      saveToLocal(updated)
+      return updated
+    })
+    needsSync.current = true
     return newIdea
-  }, [ideas, syncToGitHub])
+  }, [])
 
   // 更新灵感
   const updateIdea = useCallback((id: string, updates: Partial<Idea>) => {
-    const updated = ideas.map(idea =>
-      idea.id === id
-        ? { ...idea, ...updates, updatedAt: new Date().toISOString() }
-        : idea
-    )
-    setIdeas(updated)
-    saveToLocal(updated)
-    syncToGitHub(updated)
-  }, [ideas, syncToGitHub])
+    setIdeas(prev => {
+      const updated = prev.map(idea =>
+        idea.id === id
+          ? { ...idea, ...updates, updatedAt: new Date().toISOString() }
+          : idea
+      )
+      saveToLocal(updated)
+      return updated
+    })
+    needsSync.current = true
+  }, [])
 
   // 删除灵感
   const deleteIdea = useCallback((id: string) => {
-    const updated = ideas.filter(idea => idea.id !== id)
-    setIdeas(updated)
-    saveToLocal(updated)
-    syncToGitHub(updated)
-  }, [ideas, syncToGitHub])
+    setIdeas(prev => {
+      const updated = prev.filter(idea => idea.id !== id)
+      saveToLocal(updated)
+      return updated
+    })
+    needsSync.current = true
+  }, [])
 
   // 切换收藏
   const toggleFavorite = useCallback((id: string) => {
-    const updated = ideas.map(idea =>
-      idea.id === id ? { ...idea, isFavorite: !idea.isFavorite } : idea
-    )
-    setIdeas(updated)
-    saveToLocal(updated)
-    syncToGitHub(updated)
-  }, [ideas, syncToGitHub])
+    setIdeas(prev => {
+      const updated = prev.map(idea =>
+        idea.id === id ? { ...idea, isFavorite: !idea.isFavorite } : idea
+      )
+      saveToLocal(updated)
+      return updated
+    })
+    needsSync.current = true
+  }, [])
 
   // 手动拉取远程数据
   const pullFromGitHub = useCallback(async () => {
@@ -154,6 +159,7 @@ export function useIdeas() {
       merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setIdeas(merged)
       saveToLocal(merged)
+      needsSync.current = false
       setSyncError(null)
     } catch (err: any) {
       setSyncError(err.message)
