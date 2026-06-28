@@ -3,6 +3,8 @@
 import type { Idea, AuroraConfig } from '@/types/idea'
 
 const GITHUB_API = 'https://api.github.com'
+// 使用 CORS 代理解决浏览器跨域限制（纯前端静态站点无法直接调用 GitHub API）
+const CORS_PROXY = 'https://corsproxy.io/?'
 
 // 获取配置
 function getConfig(): AuroraConfig | null {
@@ -26,7 +28,7 @@ export function isGitHubConfigured(): boolean {
   return !!config?.githubToken && !!config?.githubRepo
 }
 
-// GitHub API 请求封装
+// GitHub API 请求封装（通过 CORS 代理）
 async function githubRequest(path: string, method: string = 'GET', body?: unknown): Promise<Response> {
   const config = getConfig()
   if (!config?.githubToken) throw new Error('GitHub token 未配置')
@@ -37,7 +39,8 @@ async function githubRequest(path: string, method: string = 'GET', body?: unknow
     'Content-Type': 'application/json',
   }
 
-  const response = await fetch(`${GITHUB_API}${path}`, {
+  const url = `${CORS_PROXY}${encodeURIComponent(GITHUB_API + path)}`
+  const response = await fetch(url, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
@@ -134,7 +137,8 @@ export async function ensureRepoExists(): Promise<boolean> {
 // 验证 GitHub Token 是否有效
 export async function validateGitHubToken(token: string): Promise<{ valid: boolean; username: string }> {
   try {
-    const response = await fetch(`${GITHUB_API}/user`, {
+    const url = `${CORS_PROXY}${encodeURIComponent(GITHUB_API + '/user')}`
+    const response = await fetch(url, {
       headers: {
         Authorization: `token ${token}`,
         Accept: 'application/vnd.github.v3+json',
