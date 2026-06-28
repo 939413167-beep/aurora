@@ -112,7 +112,7 @@ export async function ensureRepoExists(): Promise<boolean> {
     return true // 仓库已存在
   } catch {
     // 仓库不存在，尝试创建
-    const [owner] = config.githubRepo.split('/')
+    config.githubRepo.split('/')
     try {
       await githubRequest('/user/repos', 'POST', {
         name: config.githubRepo.split('/')[1],
